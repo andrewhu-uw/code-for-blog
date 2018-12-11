@@ -12,7 +12,7 @@
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
 #include "llvm/ExecutionEngine/Orc/LambdaResolver.h"
-#include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
+#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 
@@ -41,9 +41,9 @@ private:
   // This sample doesn't implement on-request or lazy compilation. It therefore
   // uses Orc's eager compilation layer directly - IRCompileLayer. It also uses
   // the basis object layer - ObjectLinkingLayer - directly.
-  using ObjLayerT = llvm::orc::ObjectLinkingLayer<>;
-  using CompileLayerT = llvm::orc::IRCompileLayer<ObjLayerT>;
-  using ModuleHandleT = CompileLayerT::ModuleSetHandleT;
+  using ObjectLayerT = llvm::orc::RTDyldObjectLinkingLayer;
+  using CompileLayerT = llvm::orc::IRCompileLayer<ObjectLayerT, llvm::orc::SimpleCompiler>;
+  using ModuleHandleT = llvm::Expected<ObjectLayerT::ObjHandleT>;
 
   // Helper method to look for symbols that already have mangled names.
   llvm::JITSymbol find_mangled_symbol(const std::string& name);
@@ -52,7 +52,7 @@ private:
 
   std::unique_ptr<llvm::TargetMachine> target_machine_;
   const llvm::DataLayout data_layout_;
-  ObjLayerT object_layer_;
+  ObjectLayerT object_layer_;
   CompileLayerT compile_layer_;
   std::vector<ModuleHandleT> module_handles_;
 };
