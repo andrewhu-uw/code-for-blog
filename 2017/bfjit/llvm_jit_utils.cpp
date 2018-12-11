@@ -10,6 +10,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
 
 using namespace llvm;
 
@@ -92,9 +93,10 @@ private:
 
 SimpleOrcJIT::SimpleOrcJIT(bool verbose)
     : verbose_(verbose), target_machine_(EngineBuilder().selectTarget()),
+      object_layer_([](){ return std::make_shared<SectionMemoryManager>(); }),
       data_layout_(target_machine_->createDataLayout()),
       compile_layer_(object_layer_,
-                     ObjectDumpingCompiler(*target_machine_, verbose_)) {
+                     llvm::orc::SimpleCompiler(*target_machine_)) {
   std::string error_string;
   if (llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr,
                                                         &error_string)) {
@@ -129,11 +131,10 @@ void SimpleOrcJIT::add_module(std::unique_ptr<llvm::Module> module) {
         }
         return JITSymbol(nullptr);
       });
-  std::vector<std::unique_ptr<llvm::Module>> moduleset;
-  moduleset.push_back(std::move(module));
-  auto handle = compile_layer_.addModuleSet(std::move(moduleset),
-                                            make_unique<SectionMemoryManager>(),
-                                            std::move(resolver));
+  // std::vector<std::unique_ptr<llvm::Module>> moduleset;
+  // moduleset.push_back(std::move(module));
+  auto handle = compile_layer_.addModule(std::move(module),
+                                            make_unique<SectionMemoryManager>());
 
   module_handles_.push_back(handle);
 }
@@ -152,9 +153,9 @@ llvm::JITSymbol SimpleOrcJIT::find_mangled_symbol(const std::string& name) {
   const bool exported_symbols_only = true;
 
   // Search modules in reverse order: from last added to first added.
-  for (auto h : make_range(module_handles_.rbegin(), module_handles_.rend())) {
+  for (auto& h : make_range(module_handles_.rbegin(), module_handles_.rend())) {
     if (auto sym =
-            compile_layer_.findSymbolIn(h, name, exported_symbols_only)) {
+            compile_layer_.findSymbolIn(*h, name, exported_symbols_only)) {
       return sym;
     }
   }
