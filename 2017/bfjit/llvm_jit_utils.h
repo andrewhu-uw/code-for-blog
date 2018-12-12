@@ -43,7 +43,7 @@ private:
   // the basis object layer - ObjectLinkingLayer - directly.
   using ObjectLayerT = llvm::orc::RTDyldObjectLinkingLayer;
   using CompileLayerT = llvm::orc::IRCompileLayer<ObjectLayerT, llvm::orc::SimpleCompiler>;
-  using ModuleHandleT = llvm::Expected<ObjectLayerT::ObjHandleT>;
+  using ModuleHandleT = ObjectLayerT::ObjHandleT;
 
   // Helper method to look for symbols that already have mangled names.
   llvm::JITSymbol find_mangled_symbol(const std::string& name);

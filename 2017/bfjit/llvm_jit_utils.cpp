@@ -134,7 +134,7 @@ void SimpleOrcJIT::add_module(std::unique_ptr<llvm::Module> module) {
   // std::vector<std::unique_ptr<llvm::Module>> moduleset;
   // moduleset.push_back(std::move(module));
   auto handle = compile_layer_.addModule(std::move(module),
-                                            make_unique<SectionMemoryManager>());
+                                            make_unique<SectionMemoryManager>()).get();
 
   module_handles_.push_back(handle);
 }
@@ -150,12 +150,12 @@ llvm::JITSymbol SimpleOrcJIT::find_symbol(const std::string& name) {
 }
 
 llvm::JITSymbol SimpleOrcJIT::find_mangled_symbol(const std::string& name) {
-  const bool exported_symbols_only = true;
+  const bool exported_symbols_only = false;
 
   // Search modules in reverse order: from last added to first added.
-  for (auto& h : make_range(module_handles_.rbegin(), module_handles_.rend())) {
+  for (auto h : module_handles_) {
     if (auto sym =
-            compile_layer_.findSymbolIn(*h, name, exported_symbols_only)) {
+            compile_layer_.findSymbolIn(h, name, exported_symbols_only)) {
       return sym;
     }
   }

@@ -227,7 +227,7 @@ void llvmjit(const Program& program, bool verbose) {
                         getchar_func, verbose);
 
   if (verbose) {
-    const char* pre_opt_file = "/tmp/llvmjit-pre-opt.ll";
+    const char* pre_opt_file = "llvmjit-pre-opt.ll";
     llvm_module_to_file(*module, pre_opt_file);
     std::cout << "[Pre optimization module] dumped to " << pre_opt_file << "\n";
   }
@@ -242,7 +242,7 @@ void llvmjit(const Program& program, bool verbose) {
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
 
-  llvm::PassManagerBuilder pm_builder;
+  /*llvm::PassManagerBuilder pm_builder;
   pm_builder.OptLevel = 3;
   pm_builder.SizeLevel = 0;
   pm_builder.LoopVectorize = true;
@@ -255,11 +255,11 @@ void llvmjit(const Program& program, bool verbose) {
 
   function_pm.doInitialization();
   function_pm.run(*jit_func);
-  module_pm.run(*module);
+  module_pm.run(*module);*/
 
   if (verbose) {
     std::cout << "[Optimization elapsed:] " << topt.elapsed() << "s\n";
-    const char* post_opt_file = "/tmp/llvmjit-post-opt.ll";
+    const char* post_opt_file = "llvmjit-post-opt.ll";
     llvm_module_to_file(*module, post_opt_file);
     std::cout << "[Post optimization module] dumped to " << post_opt_file
               << "\n";
@@ -277,7 +277,7 @@ void llvmjit(const Program& program, bool verbose) {
 
   using JitFuncType = void (*)(void);
   JitFuncType jit_func_ptr =
-      reinterpret_cast<JitFuncType>(jit_func_sym.getAddress());
+      reinterpret_cast<JitFuncType>(jit_func_sym.getAddress().get());
 
   Timer texec;
 
