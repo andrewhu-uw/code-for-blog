@@ -64,6 +64,43 @@ struct BracketBlocks {
   llvm::BasicBlock* post_loop_block;
 };
 
+llvm::Function* emit_dynamic_function(llvm::Module* module,
+	llvm::Function* putchar_func) {
+	llvm::LLVMContext& context = module->getContext();
+
+	llvm::Type* void_type = llvm::Type::getVoidTy(context);
+	llvm::Type* voidP_type = llvm::Type::getInt8PtrTy(context);
+	llvm::Type* int8P_type = voidP_type;
+	llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+
+	llvm::Function* dyn_func = llvm::Function::Create(
+		llvm::FunctionType::get(void_type, { int8P_type, int32_type }, false),
+		llvm::Function::ExternalLinkage, "dyn_func", module);
+	
+	llvm::Argument* args[2];
+	{
+		char* names[] = { "memory", "index" };
+		unsigned i = 0;
+		for (llvm::Argument& arg : dyn_func->args()) {
+			arg.setName(names[i]);
+			args[i] = &arg;
+			i++;
+		}
+	}
+
+	llvm::BasicBlock* entry_bb =
+		llvm::BasicBlock::Create(context, "entry", dyn_func);
+	llvm::IRBuilder<> builder(entry_bb);
+
+	llvm::Value* indexed_ptr = builder.CreateGEP(args[0], { args[1] }, "indexed_ptr");
+	llvm::LoadInst* val = builder.CreateLoad(indexed_ptr, "val");
+	llvm::Value* casted_val = builder.CreateIntCast(val, int32_type, false, "casted_val");
+	builder.CreateCall(putchar_func, { casted_val });
+	builder.CreateRetVoid();
+
+	return dyn_func;
+}
+
 llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
                                   llvm::Function* dump_memory_func,
                                   llvm::Function* putchar_func,
@@ -73,9 +110,17 @@ llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
   llvm::Type* int8_type = llvm::Type::getInt8Ty(context);
   llvm::Type* void_type = llvm::Type::getVoidTy(context);
+  llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
+  llvm::Type* voidP_type = llvm::Type::getInt8PtrTy(context);
+  llvm::Type* int8P_type = voidP_type;
+
+  llvm::Function* malloc_func = llvm::Function::Create(
+	  llvm::FunctionType::get(voidP_type, { int64_type }, false),
+	  llvm::Function::ExternalLinkage, "malloc", module);
 
   llvm::FunctionType* jit_func_type =
-      llvm::FunctionType::get(void_type, {}, false);
+      //llvm::FunctionType::get(void_type, {}, false);
+	  llvm::FunctionType::get(int8P_type, {}, false);
   llvm::Function* jit_func = llvm::Function::Create(
       jit_func_type, llvm::Function::ExternalLinkage, JIT_FUNC_NAME, module);
 
@@ -86,8 +131,10 @@ llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
   // Create stack allocations for the memory and the data pointer. The memory
   // is memset to zeros. The data pointer is used as an offset into the memory
   // array; it is initialized to 0.
-  llvm::AllocaInst* memory =
-      builder.CreateAlloca(int8_type, builder.getInt32(MEMORY_SIZE), "memory");
+  /*llvm::AllocaInst* memory =
+      builder.CreateAlloca(int8_type, builder.getInt32(MEMORY_SIZE), "memory");*/
+  llvm::CallInst* memory = builder.CreateCall(malloc_func, builder.getInt64(MEMORY_SIZE), "memory");
+
   builder.CreateMemSet(memory, builder.getInt8(0), MEMORY_SIZE, 1);
   llvm::AllocaInst* dataptr_addr =
       builder.CreateAlloca(int32_type, nullptr, "dataptr_addr");
@@ -195,7 +242,8 @@ llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
     //builder.CreateCall(dump_memory_func, {memory});
   }
 
-  builder.CreateRetVoid();
+  //builder.CreateRetVoid();
+  builder.CreateRet(memory);
   return jit_func;
 }
 
@@ -225,6 +273,7 @@ void llvmjit(const Program& program, bool verbose) {
   llvm::Function* jit_func =
       emit_jit_function(program, module.get(), dump_memory_func, putchar_func,
                         getchar_func, verbose);
+  llvm::Function* dyn_func = emit_dynamic_function(module.get(), putchar_func);
 
   if (verbose) {
     const char* pre_opt_file = "llvmjit-pre-opt.ll";
@@ -237,7 +286,7 @@ void llvmjit(const Program& program, bool verbose) {
   }
 
   // Optimize the emitted LLVM IR.
-  Timer topt;
+  //Timer topt;
 
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
@@ -248,14 +297,18 @@ void llvmjit(const Program& program, bool verbose) {
   pm_builder.LoopVectorize = true;
   pm_builder.SLPVectorize = true;
 
+  // Suspicious that we are extracting the contents of the module unique_ptr here
   llvm::legacy::FunctionPassManager function_pm(module.get());
   llvm::legacy::PassManager module_pm;
   pm_builder.populateFunctionPassManager(function_pm);
   pm_builder.populateModulePassManager(module_pm);
 
+  Timer topt;
+
   function_pm.doInitialization();
+  function_pm.run(*dyn_func);
   function_pm.run(*jit_func);
-  module_pm.run(*module);
+  //module_pm.run(*module);
 
   if (verbose) {
     std::cout << "[Optimization elapsed:] " << topt.elapsed() << "s\n";
@@ -275,13 +328,26 @@ void llvmjit(const Program& program, bool verbose) {
     DIE << "Unable to find symbol " << JIT_FUNC_NAME << " in module";
   }
 
-  using JitFuncType = void (*)(void);
+  using JitFuncType = uint8_t* (*)(void);
   JitFuncType jit_func_ptr =
       reinterpret_cast<JitFuncType>(jit_func_sym.getAddress().get());
+  void(*dyn_func_ptr)(uint8_t*, int) =
+	  reinterpret_cast<void(*)(uint8_t*, int)>(jit.find_symbol("dyn_func").getAddress().get());
 
   Timer texec;
 
-  jit_func_ptr();
+  uint8_t* tape_p = jit_func_ptr();
+
+  dump_memory(tape_p);
+
+  std::cout << std::endl << "What index would you like to see? ";
+  int index;
+  std::cin >> index;
+  std::cout << "Printing index " << index << ": ";
+
+  dyn_func_ptr(tape_p, index);
+
+  free(tape_p);
 
   if (verbose) {
     std::cout << "[-] Execution took: " << texec.elapsed() << "s)\n";
