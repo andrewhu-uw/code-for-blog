@@ -192,7 +192,7 @@ llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
   }
 
   if (verbose) {
-    builder.CreateCall(dump_memory_func, {memory});
+    //builder.CreateCall(dump_memory_func, {memory});
   }
 
   builder.CreateRetVoid();
@@ -242,7 +242,7 @@ void llvmjit(const Program& program, bool verbose) {
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
 
-  /*llvm::PassManagerBuilder pm_builder;
+  llvm::PassManagerBuilder pm_builder;
   pm_builder.OptLevel = 3;
   pm_builder.SizeLevel = 0;
   pm_builder.LoopVectorize = true;
@@ -255,7 +255,7 @@ void llvmjit(const Program& program, bool verbose) {
 
   function_pm.doInitialization();
   function_pm.run(*jit_func);
-  module_pm.run(*module);*/
+  module_pm.run(*module);
 
   if (verbose) {
     std::cout << "[Optimization elapsed:] " << topt.elapsed() << "s\n";
