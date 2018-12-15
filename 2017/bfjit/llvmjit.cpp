@@ -76,26 +76,20 @@ llvm::Function* emit_dynamic_function(llvm::Module* module,
 	llvm::Function* dyn_func = llvm::Function::Create(
 		llvm::FunctionType::get(void_type, { int8P_type, int32_type }, false),
 		llvm::Function::ExternalLinkage, "dyn_func", module);
+	dyn_func->setOnlyReadsMemory();
 	
-	llvm::Argument* args[2];
-	{
-		char* names[] = { "memory", "index" };
-		unsigned i = 0;
-		for (llvm::Argument& arg : dyn_func->args()) {
-			arg.setName(names[i]);
-			args[i] = &arg;
-			i++;
-		}
-	}
+	llvm::Argument* args = dyn_func->arg_begin();
+	assert((dyn_func->arg_end() - dyn_func->arg_begin() == 2) && "Should be two arguments");  // The Function->args is just a pointer to an array
 
 	llvm::BasicBlock* entry_bb =
 		llvm::BasicBlock::Create(context, "entry", dyn_func);
 	llvm::IRBuilder<> builder(entry_bb);
 
-	llvm::Value* indexed_ptr = builder.CreateGEP(args[0], { args[1] }, "indexed_ptr");
+	llvm::Value* indexed_ptr = builder.CreateGEP(dyn_func->arg_begin()
+			, { (dyn_func->arg_begin()+1) }, "indexed_ptr");
 	llvm::LoadInst* val = builder.CreateLoad(indexed_ptr, "val");
 	llvm::Value* casted_val = builder.CreateIntCast(val, int32_type, false, "casted_val");
-	builder.CreateCall(putchar_func, { casted_val });
+	builder.CreateCall(putchar_func, { casted_val }, "output_putchar");
 	builder.CreateRetVoid();
 
 	return dyn_func;
@@ -251,7 +245,7 @@ llvm::Function* emit_jit_function(const Program& program, llvm::Module* module,
 // runs optimizations, JITs to native code and runs the native code.
 void llvmjit(const Program& program, bool verbose) {
   llvm::LLVMContext context;
-  std::unique_ptr<llvm::Module> module(new llvm::Module("bfmodule", context));
+  std::shared_ptr<llvm::Module> module(new llvm::Module("bfmodule", context));
 
   // Add a declaration for external functions used in the JITed code. We use
   // putchar and getchar for I/O and dump_memory for reporting in verbose mode.
@@ -285,43 +279,41 @@ void llvmjit(const Program& program, bool verbose) {
     DIE << "Error verifying function... exiting";
   }
 
-  // Optimize the emitted LLVM IR.
-  //Timer topt;
+  {	// Optimize
+	  llvm::InitializeNativeTarget();
+	  llvm::InitializeNativeTargetAsmPrinter();
 
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
+	  llvm::PassManagerBuilder pm_builder;
+	  pm_builder.OptLevel = 3;
+	  pm_builder.SizeLevel = 0;
+	  pm_builder.LoopVectorize = true;
+	  pm_builder.SLPVectorize = true;
+	  llvm::legacy::FunctionPassManager function_pm(module.get());
+	  llvm::legacy::PassManager module_pm;
+	  pm_builder.populateFunctionPassManager(function_pm);
+	  pm_builder.populateModulePassManager(module_pm);
 
-  llvm::PassManagerBuilder pm_builder;
-  pm_builder.OptLevel = 3;
-  pm_builder.SizeLevel = 0;
-  pm_builder.LoopVectorize = true;
-  pm_builder.SLPVectorize = true;
+	  Timer topt;
+	  function_pm.doInitialization();
+	  function_pm.run(*dyn_func);
+	  function_pm.run(*jit_func);
+	  // This seems to take a lot ot time to do very little, but I haven't done enough benchmarking
+	  //module_pm.run(*module); 
 
-  // Suspicious that we are extracting the contents of the module unique_ptr here
-  llvm::legacy::FunctionPassManager function_pm(module.get());
-  llvm::legacy::PassManager module_pm;
-  pm_builder.populateFunctionPassManager(function_pm);
-  pm_builder.populateModulePassManager(module_pm);
-
-  Timer topt;
-
-  function_pm.doInitialization();
-  function_pm.run(*dyn_func);
-  function_pm.run(*jit_func);
-  //module_pm.run(*module);
-
-  if (verbose) {
-    std::cout << "[Optimization elapsed:] " << topt.elapsed() << "s\n";
-    const char* post_opt_file = "llvmjit-post-opt.ll";
-    llvm_module_to_file(*module, post_opt_file);
-    std::cout << "[Post optimization module] dumped to " << post_opt_file
-              << "\n";
+	  if (verbose) {
+		  std::cout << "[Optimization elapsed:] " << topt.elapsed() << "s\n";
+		  const char* post_opt_file = "llvmjit-post-opt.ll";
+		  llvm_module_to_file(*module, post_opt_file);
+		  std::cout << "[Post optimization module] dumped to " << post_opt_file
+			  << "\n";
+	  }
   }
-
+  
   // JIT the optimized LLVM IR to native code and execute it.
   SimpleOrcJIT jit(/*verbose=*/verbose);
   module->setDataLayout(jit.get_target_machine().createDataLayout());
-  jit.add_module(std::move(module));
+  // Compile this code
+  jit.add_module(module);
 
   llvm::JITSymbol jit_func_sym = jit.find_symbol(JIT_FUNC_NAME);
   if (!jit_func_sym) {
@@ -331,8 +323,8 @@ void llvmjit(const Program& program, bool verbose) {
   using JitFuncType = uint8_t* (*)(void);
   JitFuncType jit_func_ptr =
       reinterpret_cast<JitFuncType>(jit_func_sym.getAddress().get());
-  void(*dyn_func_ptr)(uint8_t*, int) =
-	  reinterpret_cast<void(*)(uint8_t*, int)>(jit.find_symbol("dyn_func").getAddress().get());
+  /*void(*dyn_func_ptr)(uint8_t*, int) =
+	  reinterpret_cast<void(*)(uint8_t*, int)>(jit.find_symbol("dyn_func").getAddress().get());*/
 
   Timer texec;
 
@@ -344,6 +336,21 @@ void llvmjit(const Program& program, bool verbose) {
   int index;
   std::cin >> index;
   std::cout << "Printing index " << index << ": ";
+
+  // Edit the function
+  llvm::CallInst* pi = llvm::CallInst::Create(putchar_func, { llvm::ConstantInt::get(int32_type, 'z') }, "end_putchar");
+  for (auto& instr : dyn_func->getEntryBlock()) {
+	  if (instr.getName() == "output_putchar") {
+		  pi->insertAfter(&instr);
+		  break;
+	  }
+  }
+
+  //Re-JIT everything
+  jit.add_module(module);
+
+  void(*dyn_func_ptr)(uint8_t*, int) =
+	  reinterpret_cast<void(*)(uint8_t*, int)>(jit.find_symbol("dyn_func").getAddress().get());
 
   dyn_func_ptr(tape_p, index);
 
