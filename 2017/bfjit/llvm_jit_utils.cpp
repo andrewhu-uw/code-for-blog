@@ -114,7 +114,7 @@ SimpleOrcJIT::SimpleOrcJIT(bool verbose)
   }
 }
 
-void SimpleOrcJIT::add_module(std::unique_ptr<llvm::Module> module) {
+void SimpleOrcJIT::add_module(std::shared_ptr<llvm::Module> module) {
   // This resolver looks back into the host with dlsym to find symbols the
   // module calls but aren't defined in it.
   auto resolver = orc::createLambdaResolver(
@@ -131,12 +131,11 @@ void SimpleOrcJIT::add_module(std::unique_ptr<llvm::Module> module) {
         }
         return JITSymbol(nullptr);
       });
-  // std::vector<std::unique_ptr<llvm::Module>> moduleset;
-  // moduleset.push_back(std::move(module));
   auto handle = compile_layer_.addModule(std::move(module),
                                             make_unique<SectionMemoryManager>()).get();
 
   module_handles_.push_back(handle);
+  mostRecentModule_ = module;
 }
 
 llvm::JITSymbol SimpleOrcJIT::find_symbol(const std::string& name) {
@@ -149,11 +148,18 @@ llvm::JITSymbol SimpleOrcJIT::find_symbol(const std::string& name) {
   return find_mangled_symbol(mangled_name);
 }
 
+/// @pre There is no reference to the most recent module alive, other than SimpleOrcJit's
+std::shared_ptr<llvm::Module> SimpleOrcJIT::getMostRecentModule()
+{
+	assert(mostRecentModule_.unique() && "getMostRecentModule should only be called if there is no other reference to the most recent module");
+	return std::move(mostRecentModule_);
+}
+
 llvm::JITSymbol SimpleOrcJIT::find_mangled_symbol(const std::string& name) {
   const bool exported_symbols_only = false;
 
   // Search modules in reverse order: from last added to first added.
-  for (auto h : module_handles_) {
+  for (auto h : make_range(module_handles_.rbegin(), module_handles_.rend())) {
     if (auto sym =
             compile_layer_.findSymbolIn(h, name, exported_symbols_only)) {
       return sym;

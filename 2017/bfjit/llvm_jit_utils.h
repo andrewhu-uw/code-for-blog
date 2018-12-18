@@ -31,11 +31,13 @@ public:
   }
 
   // Add an LLVM module to the JIT. The JIT takes ownership.
-  void add_module(std::unique_ptr<llvm::Module> module);
+  void add_module(std::shared_ptr<llvm::Module> module);
 
   // Find a symbol in JITed code. name is plain, unmangled. SimpleOrcJIT will
   // mangle it internally.
   llvm::JITSymbol find_symbol(const std::string& name);
+
+  std::shared_ptr<llvm::Module> getMostRecentModule();
 
 private:
   // This sample doesn't implement on-request or lazy compilation. It therefore
@@ -55,6 +57,7 @@ private:
   ObjectLayerT object_layer_;
   CompileLayerT compile_layer_;
   std::vector<ModuleHandleT> module_handles_;
+  std::shared_ptr<llvm::Module> mostRecentModule_;
 };
 
 #endif /* LLVM_JIT_UTILS_H */
